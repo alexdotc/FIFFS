@@ -36,8 +36,16 @@
 using std::vector;
 using std::string;
 
-static vector<string> filenames{"hello"};
-static vector<string> filedata{"Hello World!\n"};
+struct Inode {
+    string name;
+    string data;
+
+    size_t namelength() { return name.length(); }
+    size_t size() { return data.size(); }
+    const char *cbuf() { return data.data(); }
+};
+
+static vector<Inode> files = {{"hello", "Hello World!\n"}};
 
 static int hello_stat(fuse_ino_t ino, struct stat *stbuf) {
     printf("hello_stat\n");
@@ -51,7 +59,7 @@ static int hello_stat(fuse_ino_t ino, struct stat *stbuf) {
     case 2:
         stbuf->st_mode = S_IFREG | 0444;
         stbuf->st_nlink = 1;
-        stbuf->st_size = filedata[0].length();
+        stbuf->st_size = files[0].size();
         break;
 
     default:
@@ -75,7 +83,7 @@ static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
 static void hello_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     struct fuse_entry_param e;
 
-    if (parent != 1 || strcmp(name, filenames[0].c_str()) != 0)
+    if (parent != 1 || strcmp(name, files[0].name.c_str()) != 0)
         fuse_reply_err(req, ENOENT);
     else {
         memset(&e, 0, sizeof(e));
@@ -103,11 +111,9 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_
     fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf, b->size);
 }
 
-#define min(x, y) ((x) < (y) ? (x) : (y))
-
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
     if (off < bufsize)
-        return fuse_reply_buf(req, buf + off, min(bufsize - off, maxsize));
+        return fuse_reply_buf(req, buf + off, std::min(bufsize - off, maxsize));
     else
         return fuse_reply_buf(req, NULL, 0);
 }
@@ -124,8 +130,8 @@ static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t 
         memset(&b, 0, sizeof(b));
         dirbuf_add(req, &b, ".", 1);
         dirbuf_add(req, &b, "..", 1);
-        for (int i = 0; i < filenames.size(); ++i)
-            dirbuf_add(req, &b, filenames[i].c_str(), 2 + i);
+        for (int i = 0; i < files.size(); ++i)
+            dirbuf_add(req, &b, files[i].name.c_str(), 2 + i);
         reply_buf_limited(req, b.p, b.size, off, size);
         free(b.p);
     }
@@ -146,7 +152,7 @@ static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off
     (void)fi;
 
     assert(ino == 2);
-    reply_buf_limited(req, filedata[0].c_str(), filedata[0].size(), off, size);
+    reply_buf_limited(req, files[0].cbuf(), files[0].data.size(), off, size);
 }
 
 static const struct fuse_lowlevel_ops hello_ll_oper = {
