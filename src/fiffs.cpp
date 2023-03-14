@@ -18,6 +18,7 @@
  * \include hello_ll.c
  */
 
+#include <sys/stat.h>
 #define FUSE_USE_VERSION 33
 
 #include <fuse3/fuse_lowlevel.h>
@@ -33,8 +34,10 @@
 #include <vector>
 #include <string>
 
-using std::vector;
 using std::string;
+using std::vector;
+
+static int uid = 0;
 
 struct Inode {
     string name;
@@ -45,54 +48,61 @@ struct Inode {
     const char *cbuf() { return data.data(); }
 };
 
-static vector<Inode> files = {{"hello", "Hello World!\n"}};
+static vector<Inode> files = {{"foo", "foodat\n"}, {"bar", "bardat\n"}};
 
-static int hello_stat(fuse_ino_t ino, struct stat *stbuf) {
-    printf("hello_stat\n");
+static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
     stbuf->st_ino = ino;
-    switch (ino) {
-    case 1:
+    int fileno = ino - 2;
+    printf("fiffs_stat %d\n", fileno);
+    if (ino == 1) {
+        stbuf->st_uid = stbuf->st_gid = uid;
         stbuf->st_mode = S_IFDIR | 0755;
         stbuf->st_nlink = 2;
-        break;
-
-    case 2:
-        stbuf->st_mode = S_IFREG | 0444;
-        stbuf->st_nlink = 1;
-        stbuf->st_size = files[0].size();
-        break;
-
-    default:
+        return 0;
+    } else if (fileno > files.size())
         return -1;
-    }
+
+    stbuf->st_uid = stbuf->st_gid = uid;
+    stbuf->st_mode = S_IFREG | 0666;
+    stbuf->st_nlink = 1;
+    stbuf->st_size = files[fileno].size();
+
     return 0;
 }
 
-static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+static void fiffs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     struct stat stbuf;
-    printf("hello_ll_getattr\n");
+    printf("fiffs_getattr\n");
     (void)fi;
 
     memset(&stbuf, 0, sizeof(stbuf));
-    if (hello_stat(ino, &stbuf) == -1)
+    if (fiffs_stat(ino, &stbuf) == -1)
         fuse_reply_err(req, ENOENT);
     else
         fuse_reply_attr(req, &stbuf, 1.0);
 }
 
-static void hello_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
+static void fiffs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
+    printf("fiffs_lookup %s\n", name);
     struct fuse_entry_param e;
 
-    if (parent != 1 || strcmp(name, files[0].name.c_str()) != 0)
+    if (parent != 1)
         fuse_reply_err(req, ENOENT);
     else {
         memset(&e, 0, sizeof(e));
-        e.ino = 2;
-        e.attr_timeout = 1.0;
-        e.entry_timeout = 1.0;
-        hello_stat(e.ino, &e.attr);
 
-        fuse_reply_entry(req, &e);
+        for (int i = 0; i < files.size(); i++) {
+            if (files[i].name == string(name)) {
+                e.ino = i + 2;
+                e.attr_timeout = 1.0;
+                e.entry_timeout = 1.0;
+                fiffs_stat(e.ino, &e.attr);
+                printf("%ld\n", e.ino);
+
+                fuse_reply_entry(req, &e);
+            }
+        }
+        fuse_reply_err(req, ENOENT);
     }
 }
 
@@ -118,8 +128,8 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
         return fuse_reply_buf(req, NULL, 0);
 }
 
-static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
-    printf("hello_ll_readdir\n");
+static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
+    printf("fiffs_readdir\n");
     (void)fi;
 
     if (ino != 1)
@@ -137,30 +147,62 @@ static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t 
     }
 }
 
-static void hello_ll_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    printf("hello_ll_open\n");
-    if (ino != 2)
+static void fiffs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    printf("fiffs_open\n");
+    if (ino < 2)
         fuse_reply_err(req, EISDIR);
-    else if ((fi->flags & O_ACCMODE) != O_RDONLY)
-        fuse_reply_err(req, EACCES);
     else
         fuse_reply_open(req, fi);
 }
 
-static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
-    printf("hello_ll_read\n");
+static void fiffs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
+    printf("fiffs_read\n");
     (void)fi;
 
-    assert(ino == 2);
-    reply_buf_limited(req, files[0].cbuf(), files[0].data.size(), off, size);
+    reply_buf_limited(req, files[ino - 2].cbuf(), files[ino - 2].data.size(), off, size);
 }
 
-static const struct fuse_lowlevel_ops hello_ll_oper = {
-    .lookup = hello_ll_lookup,
-    .getattr = hello_ll_getattr,
-    .open = hello_ll_open,
-    .read = hello_ll_read,
-    .readdir = hello_ll_readdir,
+static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev) {
+    printf("fiffs_mknod\n");
+    if (parent == 1 && S_ISREG(mode)) {
+        files.push_back({name, ""});
+
+        fuse_entry_param e;
+        memset(&e, 0, sizeof(e));
+        fiffs_stat(files.size() - 2, &e.attr);
+        e.attr.st_mode = mode;
+        e.attr_timeout = 1.0;
+        e.entry_timeout = 1.0;
+        e.generation = e.attr.st_ino;
+
+        fuse_reply_entry(req, &e);
+    } else {
+        fuse_reply_err(req, EPERM);
+    }
+}
+
+static void fiffs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off,
+                        struct fuse_file_info *fi) {
+    printf("fiffs_write\n");
+    if (ino >= 2) {
+        auto &file = files[ino - 2];
+        file.data.reserve(off + size);
+        file.data.resize(std::max(file.data.size(), size + off));
+        memcpy((char *)file.data.data() + off, buf, size);
+        fuse_reply_write(req, size);
+        return;
+    }
+    fuse_reply_err(req, EPERM);
+}
+
+static const struct fuse_lowlevel_ops fiffs_oper = {
+    .lookup = fiffs_lookup,
+    .getattr = fiffs_getattr,
+    .mknod = fiffs_mknod,
+    .open = fiffs_open,
+    .read = fiffs_read,
+    .write = fiffs_write,
+    .readdir = fiffs_readdir,
 };
 
 int main(int argc, char *argv[]) {
@@ -169,6 +211,7 @@ int main(int argc, char *argv[]) {
     struct fuse_cmdline_opts opts;
     struct fuse_loop_config config;
     int ret = -1;
+    uid = getuid();
 
     if (fuse_parse_cmdline(&args, &opts) != 0)
         return 1;
@@ -192,7 +235,7 @@ int main(int argc, char *argv[]) {
         goto err_out1;
     }
 
-    se = fuse_session_new(&args, &hello_ll_oper, sizeof(hello_ll_oper), NULL);
+    se = fuse_session_new(&args, &fiffs_oper, sizeof(fiffs_oper), NULL);
     if (se == NULL)
         goto err_out1;
 
