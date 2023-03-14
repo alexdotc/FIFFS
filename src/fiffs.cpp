@@ -30,10 +30,17 @@
 #include <string.h>
 #include <unistd.h>
 
-static const char *hello_str = "Hello World!\n";
-static const char *hello_name = "hello";
+#include <vector>
+#include <string>
+
+using std::vector;
+using std::string;
+
+static vector<string> filenames{"hello"};
+static vector<string> filedata{"Hello World!\n"};
 
 static int hello_stat(fuse_ino_t ino, struct stat *stbuf) {
+    printf("hello_stat\n");
     stbuf->st_ino = ino;
     switch (ino) {
     case 1:
@@ -44,7 +51,7 @@ static int hello_stat(fuse_ino_t ino, struct stat *stbuf) {
     case 2:
         stbuf->st_mode = S_IFREG | 0444;
         stbuf->st_nlink = 1;
-        stbuf->st_size = strlen(hello_str);
+        stbuf->st_size = filedata[0].length();
         break;
 
     default:
@@ -55,7 +62,7 @@ static int hello_stat(fuse_ino_t ino, struct stat *stbuf) {
 
 static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     struct stat stbuf;
-
+    printf("hello_ll_getattr\n");
     (void)fi;
 
     memset(&stbuf, 0, sizeof(stbuf));
@@ -68,7 +75,7 @@ static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
 static void hello_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     struct fuse_entry_param e;
 
-    if (parent != 1 || strcmp(name, hello_name) != 0)
+    if (parent != 1 || strcmp(name, filenames[0].c_str()) != 0)
         fuse_reply_err(req, ENOENT);
     else {
         memset(&e, 0, sizeof(e));
@@ -106,6 +113,7 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
 }
 
 static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
+    printf("hello_ll_readdir\n");
     (void)fi;
 
     if (ino != 1)
@@ -116,13 +124,15 @@ static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t 
         memset(&b, 0, sizeof(b));
         dirbuf_add(req, &b, ".", 1);
         dirbuf_add(req, &b, "..", 1);
-        dirbuf_add(req, &b, hello_name, 2);
+        for (int i = 0; i < filenames.size(); ++i)
+            dirbuf_add(req, &b, filenames[i].c_str(), 2 + i);
         reply_buf_limited(req, b.p, b.size, off, size);
         free(b.p);
     }
 }
 
 static void hello_ll_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    printf("hello_ll_open\n");
     if (ino != 2)
         fuse_reply_err(req, EISDIR);
     else if ((fi->flags & O_ACCMODE) != O_RDONLY)
@@ -132,18 +142,19 @@ static void hello_ll_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 }
 
 static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
+    printf("hello_ll_read\n");
     (void)fi;
 
     assert(ino == 2);
-    reply_buf_limited(req, hello_str, strlen(hello_str), off, size);
+    reply_buf_limited(req, filedata[0].c_str(), filedata[0].size(), off, size);
 }
 
 static const struct fuse_lowlevel_ops hello_ll_oper = {
     .lookup = hello_ll_lookup,
     .getattr = hello_ll_getattr,
-    .readdir = hello_ll_readdir,
     .open = hello_ll_open,
     .read = hello_ll_read,
+    .readdir = hello_ll_readdir,
 };
 
 int main(int argc, char *argv[]) {
