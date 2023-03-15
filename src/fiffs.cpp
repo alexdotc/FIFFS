@@ -6,6 +6,9 @@
   This program can be distributed under the terms of the GNU GPLv3.
 */
 
+#include <asm-generic/errno-base.h>
+#include <ctime>
+#include <sys/types.h>
 #define FUSE_USE_VERSION 33
 
 #include <cassert>
@@ -38,7 +41,7 @@ struct Inode {
 };
 
 static vector<Inode> files = {{"foo", "foodat\n"}, {"bar", "bardat\n"}};
-static std::unordered_map<string, int> lookup = {{"foo", 0}, {"bar", 1}};
+static std::unordered_map<string, int> lookup = {{files[0].name, 0}, {files[1].name, 1}};
 
 static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
     stbuf->st_ino = ino;
@@ -179,6 +182,40 @@ static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mod
     }
 }
 
+static void fiffs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi) {
+    if (ino == 1) {
+        fuse_reply_err(req, EPERM);
+    }
+    struct stat new_attr = {0};
+
+    new_attr.st_uid = new_attr.st_gid = uid;
+    new_attr.st_mode = S_IFREG | 0666;
+    new_attr.st_nlink = 1;
+    new_attr.st_size = files[ino - 2].size();
+
+    if (FUSE_SET_ATTR_SIZE & to_set) {
+        new_attr.st_size = attr->st_size;
+        files[ino - 2].data.resize(attr->st_size);
+    }
+    if (FUSE_SET_ATTR_UID & to_set)
+        new_attr.st_uid = attr->st_uid;
+    if (FUSE_SET_ATTR_GID & to_set)
+        new_attr.st_gid = attr->st_gid;
+    if (FUSE_SET_ATTR_MODE & to_set)
+        new_attr.st_mode = attr->st_mode;
+    if (FUSE_SET_ATTR_MTIME & to_set)
+        new_attr.st_mtim = attr->st_mtim;
+    if (FUSE_SET_ATTR_ATIME & to_set)
+        new_attr.st_atim = attr->st_atim;
+    if (FUSE_SET_ATTR_ATIME_NOW & to_set)
+        clock_gettime(CLOCK_REALTIME, &new_attr.st_atim);
+    if (FUSE_SET_ATTR_MTIME & to_set)
+        clock_gettime(CLOCK_REALTIME, &new_attr.st_ctim);
+    if (FUSE_SET_ATTR_MTIME_NOW & to_set)
+        clock_gettime(CLOCK_REALTIME, &new_attr.st_mtim);
+    fuse_reply_attr(req, &new_attr, 1.0);
+}
+
 static void fiffs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off,
                         struct fuse_file_info *fi) {
     printf("fiffs_write\n");
@@ -196,6 +233,7 @@ static void fiffs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t 
 static const struct fuse_lowlevel_ops fiffs_oper = {
     .lookup = fiffs_lookup,
     .getattr = fiffs_getattr,
+    .setattr = fiffs_setattr,
     .mknod = fiffs_mknod,
     .open = fiffs_open,
     .read = fiffs_read,
