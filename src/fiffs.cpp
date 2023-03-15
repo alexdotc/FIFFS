@@ -1,38 +1,27 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+                2023       Robert Blackwell <rblackwell@flatironinstitute.org>
 
-  This program can be distributed under the terms of the GNU GPLv2.
-  See the file COPYING.
+  This program can be distributed under the terms of the GNU GPLv3.
 */
 
-/** @file
- *
- * minimal example filesystem using low-level API
- *
- * Compile with:
- *
- *     gcc -Wall hello_ll.c `pkg-config fuse3 --cflags --libs` -o hello_ll
- *
- * ## Source code ##
- * \include hello_ll.c
- */
-
-#include <sys/stat.h>
 #define FUSE_USE_VERSION 33
 
-#include <fuse3/fuse_lowlevel.h>
+#include <cassert>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-#include <assert.h>
-#include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
-#include <vector>
-#include <string>
+#include <fuse3/fuse_lowlevel.h>
+#include <sys/stat.h>
 
 using std::string;
 using std::vector;
@@ -49,6 +38,7 @@ struct Inode {
 };
 
 static vector<Inode> files = {{"foo", "foodat\n"}, {"bar", "bardat\n"}};
+static std::unordered_map<string, int> lookup = {{"foo", 0}, {"bar", 1}};
 
 static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
     stbuf->st_ino = ino;
@@ -84,25 +74,26 @@ static void fiffs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 
 static void fiffs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     printf("fiffs_lookup %s\n", name);
-    struct fuse_entry_param e;
 
     if (parent != 1)
         fuse_reply_err(req, ENOENT);
     else {
-        memset(&e, 0, sizeof(e));
+        try {
+            struct fuse_entry_param e;
+            memset(&e, 0, sizeof(e));
+            int i = lookup.at(string(name));
 
-        for (int i = 0; i < files.size(); i++) {
-            if (files[i].name == string(name)) {
-                e.ino = i + 2;
-                e.attr_timeout = 1.0;
-                e.entry_timeout = 1.0;
-                fiffs_stat(e.ino, &e.attr);
-                printf("%ld\n", e.ino);
+            e.ino = i + 2;
+            e.attr_timeout = 1.0;
+            e.entry_timeout = 1.0;
+            fiffs_stat(e.ino, &e.attr);
+            printf("%ld\n", e.ino);
 
-                fuse_reply_entry(req, &e);
-            }
+            fuse_reply_entry(req, &e);
+            return;
+        } catch (...) {
+            fuse_reply_err(req, ENOENT);
         }
-        fuse_reply_err(req, ENOENT);
     }
 }
 
@@ -163,18 +154,25 @@ static void fiffs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, s
 }
 
 static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev) {
-    printf("fiffs_mknod\n");
+    printf("fiffs_mknod %s %ld\n", name, parent);
+
     if (parent == 1 && S_ISREG(mode)) {
         files.push_back({name, ""});
 
         fuse_entry_param e;
         memset(&e, 0, sizeof(e));
-        fiffs_stat(files.size() - 2, &e.attr);
-        e.attr.st_mode = mode;
+        int fileno = files.size() - 1;
+        e.ino = e.attr.st_ino = fileno + 2;
+        e.attr.st_uid = e.attr.st_gid = uid;
+        e.attr.st_mode = S_IFREG | mode;
+        e.attr.st_nlink = 1;
+        e.attr.st_size = files[fileno].size();
         e.attr_timeout = 1.0;
         e.entry_timeout = 1.0;
         e.generation = e.attr.st_ino;
 
+        printf("inserting %s at %d\n", name, fileno);
+        lookup.insert({string(name), fileno});
         fuse_reply_entry(req, &e);
     } else {
         fuse_reply_err(req, EPERM);
