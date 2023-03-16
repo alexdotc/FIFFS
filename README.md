@@ -4,11 +4,14 @@ unlinking/removing files. I.e. it's only useful for testing various performance 
 
 # Building and running
 ```bash
-mkdir build
+mkdir -p build
 cd build
 cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
 make
-
-./tmpfs_fuse -f /path/to/mnt &>/dev/null
-touch /path/to/mnt/{0..100}
+mkdir -p mnt
+./tmpfs_fuse -f mnt &>/dev/null &
+ls mnt
+touch mnt/{1..1000}
+ls -fl mnt | wc -l
+kill %1
 ```
