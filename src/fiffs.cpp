@@ -13,9 +13,11 @@
 
 #include <cassert>
 #include <cerrno>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -35,18 +37,29 @@ struct Inode {
     string name;
     string data;
 
-    size_t namelength() { return name.length(); }
-    size_t size() { return data.size(); }
-    const char *cbuf() { return data.data(); }
+    size_t namelength() const { return name.length(); }
+    size_t size() const { return data.size(); }
+    char *cbuf() { return const_cast<char *>(data.data()); }
 };
 
 static vector<Inode> files = {{"foo", "foodat\n"}, {"bar", "bardat\n"}};
 static std::unordered_map<string, int> lookup = {{files[0].name, 0}, {files[1].name, 1}};
+static int fiffs_debug = 0;
+
+inline void debug_printf(const char *__restrict format, ...) {
+    if (fiffs_debug) {
+        va_list args;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+    }
+}
 
 static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
     stbuf->st_ino = ino;
     int fileno = ino - 2;
-    printf("fiffs_stat %d\n", fileno);
+    debug_printf("fiffs_stat %d\n", fileno);
+
     if (ino == 1) {
         stbuf->st_uid = stbuf->st_gid = uid;
         stbuf->st_mode = S_IFDIR | 0755;
@@ -65,8 +78,7 @@ static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
 
 static void fiffs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     struct stat stbuf;
-    printf("fiffs_getattr\n");
-    (void)fi;
+    debug_printf("fiffs_getattr\n");
 
     memset(&stbuf, 0, sizeof(stbuf));
     if (fiffs_stat(ino, &stbuf) == -1)
@@ -76,7 +88,7 @@ static void fiffs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 }
 
 static void fiffs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    printf("fiffs_lookup %s\n", name);
+    debug_printf("fiffs_lookup %s\n", name);
 
     if (parent != 1)
         fuse_reply_err(req, ENOENT);
@@ -90,7 +102,6 @@ static void fiffs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
             e.attr_timeout = 1.0;
             e.entry_timeout = 1.0;
             fiffs_stat(e.ino, &e.attr);
-            printf("%ld\n", e.ino);
 
             fuse_reply_entry(req, &e);
             return;
@@ -123,8 +134,7 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
 }
 
 static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
-    printf("fiffs_readdir\n");
-    (void)fi;
+    debug_printf("fiffs_readdir\n");
 
     if (ino != 1)
         fuse_reply_err(req, ENOTDIR);
@@ -142,7 +152,7 @@ static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off
 }
 
 static void fiffs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    printf("fiffs_open\n");
+    debug_printf("fiffs_open\n");
     if (ino < 2)
         fuse_reply_err(req, EISDIR);
     else
@@ -150,20 +160,18 @@ static void fiffs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
 }
 
 static void fiffs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
-    (void)fi;
-
     struct fuse_bufvec buf = FUSE_BUFVEC_INIT(size);
 
     const off_t bufsize = files[ino - 2].data.size();
     const off_t ret_size = std::min(bufsize - off, off_t(size));
     buf.buf[0].mem = (char *)files[ino - 2].cbuf() + off;
     buf.buf[0].size = ret_size;
-    printf("fiffs_read %ld %ld %ld\n", off, size, ret_size);
+    debug_printf("fiffs_read %ld %ld %ld\n", off, size, ret_size);
     fuse_reply_data(req, &buf, FUSE_BUF_SPLICE_MOVE);
 }
 
 static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev) {
-    printf("fiffs_mknod %s %ld\n", name, parent);
+    debug_printf("fiffs_mknod %s %ld\n", name, parent);
 
     if (parent == 1 && S_ISREG(mode)) {
         files.push_back({name, ""});
@@ -180,7 +188,7 @@ static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mod
         e.entry_timeout = 1.0;
         e.generation = e.attr.st_ino;
 
-        printf("inserting %s at %d\n", name, fileno);
+        debug_printf("inserting %s at %d\n", name, fileno);
         lookup.insert({string(name), fileno});
         fuse_reply_entry(req, &e);
     } else {
@@ -245,7 +253,7 @@ static void fiffs_init(void *userdata, struct fuse_conn_info *conn) {
     conn->want = conn->want | FUSE_CAP_SPLICE_WRITE | FUSE_CAP_SPLICE_MOVE;
 }
 
-void fiffs_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+static void fiffs_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     const int res = 0; // close(dup(fi->fh));
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
@@ -292,6 +300,8 @@ int main(int argc, char *argv[]) {
         ret = 1;
         goto err_out1;
     }
+
+    fiffs_debug = opts.debug;
 
     se = fuse_session_new(&args, &fiffs_oper, sizeof(fiffs_oper), NULL);
     if (se == NULL)
