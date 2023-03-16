@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,19 +32,31 @@
 using std::string;
 using std::vector;
 
-static int uid = 0;
+static uid_t uid = 0;
 
 struct Inode {
+    typedef enum { DIR, FILE } type;
     string name;
     string data;
+    struct stat st {
+        .st_ino = (ino_t)-1, .st_nlink = 1, .st_mode = S_IFREG | 0666, .st_uid = uid, .st_gid = uid, .st_size = 0,
+    };
+
+    Inode() = default;
+    Inode(const string &name_, type T) : name(name_) {
+        if (T == DIR)
+            throw std::runtime_error("Directory inodes not supported yet...");
+        clock_gettime(CLOCK_REALTIME, &st.st_ctim);
+        st.st_atim = st.st_mtim = st.st_ctim;
+    }
 
     size_t namelength() const { return name.length(); }
     size_t size() const { return data.size(); }
     char *cbuf() { return const_cast<char *>(data.data()); }
 };
 
-static vector<Inode> files = {{"foo", "foodat\n"}, {"bar", "bardat\n"}};
-static std::unordered_map<string, int> lookup = {{files[0].name, 0}, {files[1].name, 1}};
+static vector<Inode> files;
+static std::unordered_map<string, int> lookup;
 static int fiffs_debug = 0;
 
 inline void debug_printf(const char *__restrict format, ...) {
@@ -57,8 +70,9 @@ inline void debug_printf(const char *__restrict format, ...) {
 
 static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
     stbuf->st_ino = ino;
+    debug_printf("fiffs_stat %d\n", ino);
+
     int fileno = ino - 2;
-    debug_printf("fiffs_stat %d\n", fileno);
 
     if (ino == 1) {
         stbuf->st_uid = stbuf->st_gid = uid;
@@ -68,17 +82,14 @@ static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
     } else if (fileno > files.size())
         return -1;
 
-    stbuf->st_uid = stbuf->st_gid = uid;
-    stbuf->st_mode = S_IFREG | 0666;
-    stbuf->st_nlink = 1;
-    stbuf->st_size = files[fileno].size();
+    *stbuf = files[fileno].st;
 
     return 0;
 }
 
 static void fiffs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     struct stat stbuf;
-    debug_printf("fiffs_getattr\n");
+    debug_printf("fiffs_getattr %ld\n", ino);
 
     memset(&stbuf, 0, sizeof(stbuf));
     if (fiffs_stat(ino, &stbuf) == -1)
@@ -174,16 +185,11 @@ static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mod
     debug_printf("fiffs_mknod %s %ld\n", name, parent);
 
     if (parent == 1 && S_ISREG(mode)) {
-        files.push_back({name, ""});
-
-        fuse_entry_param e;
-        memset(&e, 0, sizeof(e));
+        files.push_back(Inode(name, Inode::FILE));
         int fileno = files.size() - 1;
-        e.ino = e.attr.st_ino = fileno + 2;
-        e.attr.st_uid = e.attr.st_gid = uid;
-        e.attr.st_mode = S_IFREG | mode;
-        e.attr.st_nlink = 1;
-        e.attr.st_size = files[fileno].size();
+        fuse_entry_param e;
+        e.attr = files.back().st;
+        files.back().st.st_ino = e.ino = e.attr.st_ino = fileno + 2;
         e.attr_timeout = 1.0;
         e.entry_timeout = 1.0;
         e.generation = e.attr.st_ino;
@@ -200,12 +206,7 @@ static void fiffs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int
     if (ino == 1) {
         fuse_reply_err(req, EPERM);
     }
-    struct stat new_attr = {0};
-
-    new_attr.st_uid = new_attr.st_gid = uid;
-    new_attr.st_mode = S_IFREG | 0666;
-    new_attr.st_nlink = 1;
-    new_attr.st_size = files[ino - 2].size();
+    struct stat new_attr = files[ino - 2].st;
 
     if (FUSE_SET_ATTR_SIZE & to_set) {
         new_attr.st_size = attr->st_size;
@@ -237,6 +238,7 @@ static void fiffs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t 
         auto &file = files[ino - 2];
         file.data.reserve(off + size);
         file.data.resize(std::max(file.data.size(), size + off));
+        file.st.st_size = file.data.size();
         memcpy((char *)file.data.data() + off, buf, size);
         fuse_reply_write(req, size);
         return;
