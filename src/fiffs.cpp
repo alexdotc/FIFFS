@@ -6,8 +6,6 @@
   This program can be distributed under the terms of the GNU GPLv3.
 */
 
-#include <asm-generic/errno-base.h>
-#include <ctime>
 #include <sys/types.h>
 #define FUSE_USE_VERSION 33
 
@@ -122,21 +120,6 @@ static void fiffs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     }
 }
 
-struct dirbuf {
-    char *p;
-    size_t size;
-};
-
-static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_ino_t ino) {
-    struct stat stbuf;
-    size_t oldsize = b->size;
-    b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
-    b->p = (char *)realloc(b->p, b->size);
-    memset(&stbuf, 0, sizeof(stbuf));
-    stbuf.st_ino = ino;
-    fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf, b->size);
-}
-
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
     if (off < bufsize)
         return fuse_reply_buf(req, buf + off, std::min(bufsize - off, maxsize));
@@ -150,13 +133,40 @@ static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off
     if (ino != 1)
         fuse_reply_err(req, ENOTDIR);
     else {
-        struct dirbuf b;
+        struct {
+            char *p;
+            size_t size;
+        } b;
 
         memset(&b, 0, sizeof(b));
-        dirbuf_add(req, &b, ".", 1);
-        dirbuf_add(req, &b, "..", 1);
-        for (int i = 0; i < files.size(); ++i)
-            dirbuf_add(req, &b, files[i].name.c_str(), 2 + i);
+
+        std::vector<int> entry_sizes(2 + files.size());
+        entry_sizes[0] = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
+        entry_sizes[1] = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
+
+        b.size = entry_sizes[0] + entry_sizes[1];
+        for (int i = 0; i < files.size(); ++i) {
+            entry_sizes[i + 2] = fuse_add_direntry(req, NULL, 0, files[i].name.c_str(), NULL, 0);
+            b.size += entry_sizes[i + 2];
+        }
+
+        struct stat stbuf;
+        memset(&stbuf, 0, sizeof(stbuf));
+        stbuf.st_ino = 1;
+        b.p = (char *)malloc(b.size);
+
+        int offset = 0;
+        fuse_add_direntry(req, b.p, entry_sizes[0], ".", &stbuf, offset + entry_sizes[0]);
+        offset += entry_sizes[0];
+        fuse_add_direntry(req, b.p + offset, entry_sizes[1], "..", &stbuf, offset + entry_sizes[1]);
+        offset += entry_sizes[1];
+        for (int i = 0; i < files.size(); ++i) {
+            stbuf.st_ino = i + 2;
+            const auto &e_size = entry_sizes[i + 2];
+            fuse_add_direntry(req, b.p + offset, e_size, files[i].name.c_str(), &stbuf, offset + e_size);
+            offset += e_size;
+        }
+
         reply_buf_limited(req, b.p, b.size, off, size);
         free(b.p);
     }
