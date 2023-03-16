@@ -150,10 +150,16 @@ static void fiffs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
 }
 
 static void fiffs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
-    printf("fiffs_read\n");
     (void)fi;
 
-    reply_buf_limited(req, files[ino - 2].cbuf(), files[ino - 2].data.size(), off, size);
+    struct fuse_bufvec buf = FUSE_BUFVEC_INIT(size);
+
+    const off_t bufsize = files[ino - 2].data.size();
+    const off_t ret_size = std::min(bufsize - off, off_t(size));
+    buf.buf[0].mem = (char *)files[ino - 2].cbuf() + off;
+    buf.buf[0].size = ret_size;
+    printf("fiffs_read %ld %ld %ld\n", off, size, ret_size);
+    fuse_reply_data(req, &buf, FUSE_BUF_SPLICE_MOVE);
 }
 
 static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev) {
@@ -230,7 +236,17 @@ static void fiffs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t 
     fuse_reply_err(req, EPERM);
 }
 
+static void fiffs_init(void *userdata, struct fuse_conn_info *conn) {
+    printf("capabilities: %d\n", conn->capable);
+    if (conn->capable & FUSE_CAP_SPLICE_WRITE)
+        printf("cap splice write enabled\n");
+    if (conn->capable & FUSE_CAP_SPLICE_MOVE)
+        printf("cap splice move enabled\n");
+    conn->want = conn->want | FUSE_CAP_SPLICE_WRITE | FUSE_CAP_SPLICE_MOVE;
+}
+
 static const struct fuse_lowlevel_ops fiffs_oper = {
+    .init = fiffs_init,
     .lookup = fiffs_lookup,
     .getattr = fiffs_getattr,
     .setattr = fiffs_setattr,
