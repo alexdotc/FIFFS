@@ -245,6 +245,11 @@ static void fiffs_init(void *userdata, struct fuse_conn_info *conn) {
     conn->want = conn->want | FUSE_CAP_SPLICE_WRITE | FUSE_CAP_SPLICE_MOVE;
 }
 
+void fiffs_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    const int res = 0; // close(dup(fi->fh));
+    fuse_reply_err(req, res == -1 ? errno : 0);
+}
+
 static const struct fuse_lowlevel_ops fiffs_oper = {
     .init = fiffs_init,
     .lookup = fiffs_lookup,
@@ -254,6 +259,7 @@ static const struct fuse_lowlevel_ops fiffs_oper = {
     .open = fiffs_open,
     .read = fiffs_read,
     .write = fiffs_write,
+    .flush = fiffs_flush,
     .readdir = fiffs_readdir,
 };
 
