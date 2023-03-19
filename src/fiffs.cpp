@@ -31,9 +31,11 @@
 
 namespace fiffs {
 using std::string;
+using std::unordered_map;
 using std::vector;
 
 static uid_t uid = 0;
+static int fiffs_debug = 0;
 
 struct Inode {
     typedef enum { DIR, FILE } type;
@@ -48,8 +50,6 @@ struct Inode {
 
     Inode() = default;
     Inode(const string &name_, type T) : name(name_) {
-        if (T == DIR)
-            throw std::runtime_error("Directory inodes not supported yet...");
         clock_gettime(CLOCK_REALTIME, &st.st_ctim);
         st.st_atim = st.st_mtim = st.st_ctim;
     }
@@ -60,11 +60,9 @@ struct Inode {
 };
 
 namespace FS {
-static vector<Inode> inodes;
-static std::unordered_map<string, int> name_to_inode;
+static vector<Inode> inodes{{}, {Inode("", Inode::DIR)}};
+static unordered_map<string, int> name_to_inode;
 }; // namespace FS
-
-static int fiffs_debug = 0;
 
 inline void debug_printf(const char *__restrict format, ...) {
     if (fiffs_debug) {
@@ -79,26 +77,24 @@ static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
     stbuf->st_ino = ino;
     debug_printf("fiffs_stat %d\n", ino);
 
-    int fileno = ino - 2;
-
     if (ino == 1) {
+        memset(stbuf, 0, sizeof(*stbuf));
         stbuf->st_uid = stbuf->st_gid = uid;
         stbuf->st_mode = S_IFDIR | 0755;
         stbuf->st_nlink = 2;
         return 0;
-    } else if (fileno > FS::inodes.size())
+    } else if (ino > FS::inodes.size())
         return -1;
 
-    *stbuf = FS::inodes[fileno].st;
+    *stbuf = FS::inodes[ino].st;
 
     return 0;
 }
 
 static void fiffs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    struct stat stbuf;
     debug_printf("fiffs_getattr %ld\n", ino);
 
-    memset(&stbuf, 0, sizeof(stbuf));
+    struct stat stbuf;
     if (fiffs_stat(ino, &stbuf) == -1)
         fuse_reply_err(req, ENOENT);
     else
@@ -114,9 +110,9 @@ static void fiffs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
         try {
             struct fuse_entry_param e;
             memset(&e, 0, sizeof(e));
-            int i = FS::name_to_inode.at(string(name));
+            int ino = FS::name_to_inode.at(string(name));
 
-            e.ino = i + 2;
+            e.ino = ino;
             e.attr_timeout = 1.0;
             e.entry_timeout = 1.0;
             fiffs_stat(e.ino, &e.attr);
@@ -149,14 +145,14 @@ static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off
 
         memset(&b, 0, sizeof(b));
 
-        std::vector<int> entry_sizes(2 + FS::inodes.size());
+        std::vector<int> entry_sizes(FS::inodes.size());
         entry_sizes[0] = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
         entry_sizes[1] = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
 
         b.size = entry_sizes[0] + entry_sizes[1];
-        for (int i = 0; i < FS::inodes.size(); ++i) {
-            entry_sizes[i + 2] = fuse_add_direntry(req, NULL, 0, FS::inodes[i].name.c_str(), NULL, 0);
-            b.size += entry_sizes[i + 2];
+        for (int i = 2; i < FS::inodes.size(); ++i) {
+            entry_sizes[i] = fuse_add_direntry(req, NULL, 0, FS::inodes[i].name.c_str(), NULL, 0);
+            b.size += entry_sizes[i];
         }
 
         struct stat stbuf;
@@ -169,9 +165,9 @@ static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off
         offset += entry_sizes[0];
         fuse_add_direntry(req, b.p + offset, entry_sizes[1], "..", &stbuf, offset + entry_sizes[1]);
         offset += entry_sizes[1];
-        for (int i = 0; i < FS::inodes.size(); ++i) {
-            stbuf.st_ino = i + 2;
-            const auto &e_size = entry_sizes[i + 2];
+        for (int i = 2; i < FS::inodes.size(); ++i) {
+            stbuf.st_ino = i;
+            const auto &e_size = entry_sizes[i];
             fuse_add_direntry(req, b.p + offset, e_size, FS::inodes[i].name.c_str(), &stbuf, offset + e_size);
             offset += e_size;
         }
@@ -192,9 +188,9 @@ static void fiffs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
 static void fiffs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     struct fuse_bufvec buf = FUSE_BUFVEC_INIT(size);
 
-    const off_t bufsize = FS::inodes[ino - 2].data.size();
+    const off_t bufsize = FS::inodes[ino].data.size();
     const off_t ret_size = std::min(bufsize - off, off_t(size));
-    buf.buf[0].mem = (char *)FS::inodes[ino - 2].cbuf() + off;
+    buf.buf[0].mem = (char *)FS::inodes[ino].cbuf() + off;
     buf.buf[0].size = ret_size;
     debug_printf("fiffs_read %ld %ld %ld\n", off, size, ret_size);
     fuse_reply_data(req, &buf, FUSE_BUF_SPLICE_MOVE);
@@ -205,16 +201,16 @@ static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mod
 
     if (parent == 1 && S_ISREG(mode)) {
         FS::inodes.push_back(Inode(name, Inode::FILE));
-        int fileno = FS::inodes.size() - 1;
+        int ino = FS::inodes.size() - 1;
         fuse_entry_param e;
         e.attr = FS::inodes.back().st;
-        FS::inodes.back().st.st_ino = e.ino = e.attr.st_ino = fileno + 2;
+        FS::inodes.back().st.st_ino = e.ino = e.attr.st_ino = ino;
         e.attr_timeout = 1.0;
         e.entry_timeout = 1.0;
         e.generation = e.attr.st_ino;
 
         debug_printf("inserting %s at %d\n", name, fileno);
-        FS::name_to_inode.insert({string(name), fileno});
+        FS::name_to_inode.insert({string(name), ino});
         fuse_reply_entry(req, &e);
     } else {
         fuse_reply_err(req, EPERM);
@@ -225,11 +221,11 @@ static void fiffs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int
     if (ino == 1) {
         fuse_reply_err(req, EPERM);
     }
-    struct stat new_attr = FS::inodes[ino - 2].st;
+    struct stat new_attr = FS::inodes[ino].st;
 
     if (FUSE_SET_ATTR_SIZE & to_set) {
         new_attr.st_size = attr->st_size;
-        FS::inodes[ino - 2].data.resize(attr->st_size);
+        FS::inodes[ino].data.resize(attr->st_size);
     }
     if (FUSE_SET_ATTR_UID & to_set)
         new_attr.st_uid = attr->st_uid;
@@ -254,7 +250,7 @@ static void fiffs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t 
                         struct fuse_file_info *fi) {
     debug_printf("fiffs_write\n");
     if (ino >= 2) {
-        auto &file = FS::inodes[ino - 2];
+        auto &file = FS::inodes[ino];
         file.data.reserve(off + size);
         file.data.resize(std::max(file.data.size(), size + off));
         file.st.st_size = file.data.size();
