@@ -21,11 +21,10 @@
 #include <vector>
 
 #include <fcntl.h>
-#include <unistd.h>
-
-#include <time.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
 
 #include <fuse3/fuse_lowlevel.h>
 
@@ -245,7 +244,7 @@ static void fiffs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int
 
 static void fiffs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off,
                         struct fuse_file_info *fi) {
-    printf("fiffs_write\n");
+    debug_printf("fiffs_write\n");
     if (ino >= 2) {
         auto &file = files[ino - 2];
         file.data.reserve(off + size);
