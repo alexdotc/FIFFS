@@ -138,42 +138,36 @@ static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off
     if (ino != 1)
         fuse_reply_err(req, ENOTDIR);
     else {
-        struct {
-            char *p;
-            size_t size;
-        } b;
-
-        memset(&b, 0, sizeof(b));
+        size_t bufsize;
 
         std::vector<int> entry_sizes(FS::inodes.size());
         entry_sizes[0] = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
         entry_sizes[1] = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
 
-        b.size = entry_sizes[0] + entry_sizes[1];
+        bufsize = entry_sizes[0] + entry_sizes[1];
         for (int i = 2; i < FS::inodes.size(); ++i) {
             entry_sizes[i] = fuse_add_direntry(req, NULL, 0, FS::inodes[i].name.c_str(), NULL, 0);
-            b.size += entry_sizes[i];
+            bufsize += entry_sizes[i];
         }
 
         struct stat stbuf;
         memset(&stbuf, 0, sizeof(stbuf));
         stbuf.st_ino = 1;
-        b.p = (char *)malloc(b.size);
+        std::vector<char> buf(bufsize);
 
         int offset = 0;
-        fuse_add_direntry(req, b.p, entry_sizes[0], ".", &stbuf, offset + entry_sizes[0]);
+        fuse_add_direntry(req, buf.data(), entry_sizes[0], ".", &stbuf, offset + entry_sizes[0]);
         offset += entry_sizes[0];
-        fuse_add_direntry(req, b.p + offset, entry_sizes[1], "..", &stbuf, offset + entry_sizes[1]);
+        fuse_add_direntry(req, buf.data() + offset, entry_sizes[1], "..", &stbuf, offset + entry_sizes[1]);
         offset += entry_sizes[1];
         for (int i = 2; i < FS::inodes.size(); ++i) {
             stbuf.st_ino = i;
             const auto &e_size = entry_sizes[i];
-            fuse_add_direntry(req, b.p + offset, e_size, FS::inodes[i].name.c_str(), &stbuf, offset + e_size);
+            fuse_add_direntry(req, buf.data() + offset, e_size, FS::inodes[i].name.c_str(), &stbuf, offset + e_size);
             offset += e_size;
         }
 
-        reply_buf_limited(req, b.p, b.size, off, size);
-        free(b.p);
+        reply_buf_limited(req, buf.data(), bufsize, off, size);
     }
 }
 
