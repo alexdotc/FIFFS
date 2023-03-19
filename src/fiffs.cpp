@@ -6,7 +6,6 @@
   This program can be distributed under the terms of the GNU GPLv3.
 */
 
-#include <sys/types.h>
 #define FUSE_USE_VERSION 33
 
 #include <cassert>
@@ -24,8 +23,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <fuse3/fuse_lowlevel.h>
+#include <time.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+
+#include <fuse3/fuse_lowlevel.h>
 
 using std::string;
 using std::vector;
