@@ -34,9 +34,10 @@ using std::string;
 using std::unordered_map;
 using std::vector;
 
-static uid_t uid = 0;
+static uid_t uid = getuid();
 static int fiffs_debug = 0;
 
+namespace FS {
 struct Inode {
     typedef enum { DIR, FILE } type;
     string name;
@@ -50,6 +51,9 @@ struct Inode {
 
     Inode() = default;
     Inode(const string &name_, type T) : name(name_) {
+        if (T == DIR)
+            st.st_mode = S_IFDIR | 0755;
+
         clock_gettime(CLOCK_REALTIME, &st.st_ctim);
         st.st_atim = st.st_mtim = st.st_ctim;
     }
@@ -59,9 +63,13 @@ struct Inode {
     char *cbuf() { return const_cast<char *>(data.data()); }
 };
 
-namespace FS {
-static vector<Inode> inodes{{}, {Inode("", Inode::DIR)}};
+static vector<Inode> inodes{{}, {Inode("I_AM_ROOT", Inode::DIR)}};
 static unordered_map<string, int> name_to_inode;
+void init() {
+    inodes[0].st.st_ino = 0;
+    inodes[1].st.st_ino = 1;
+}
+
 }; // namespace FS
 
 inline void debug_printf(const char *__restrict format, ...) {
@@ -74,17 +82,10 @@ inline void debug_printf(const char *__restrict format, ...) {
 }
 
 static int fiffs_stat(fuse_ino_t ino, struct stat *stbuf) {
-    stbuf->st_ino = ino;
     debug_printf("fiffs_stat %d\n", ino);
 
-    if (ino == 1) {
-        memset(stbuf, 0, sizeof(*stbuf));
-        stbuf->st_uid = stbuf->st_gid = uid;
-        stbuf->st_mode = S_IFDIR | 0755;
-        stbuf->st_nlink = 2;
-        return 0;
-    } else if (ino > FS::inodes.size())
-        return -1;
+    if (ino <= 0 || ino >= FS::inodes.size())
+        return 1;
 
     *stbuf = FS::inodes[ino].st;
 
@@ -194,7 +195,7 @@ static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mod
     debug_printf("fiffs_mknod %s %ld\n", name, parent);
 
     if (parent == 1 && S_ISREG(mode)) {
-        FS::inodes.push_back(Inode(name, Inode::FILE));
+        FS::inodes.push_back(FS::Inode(name, FS::Inode::FILE));
         int ino = FS::inodes.size() - 1;
         fuse_entry_param e;
         e.attr = FS::inodes.back().st;
@@ -288,7 +289,6 @@ int main(int argc, char *argv[]) {
     struct fuse_cmdline_opts opts;
     struct fuse_loop_config config;
     int ret = -1;
-    uid = getuid();
 
     if (fuse_parse_cmdline(&args, &opts) != 0)
         return 1;
@@ -313,6 +313,7 @@ int main(int argc, char *argv[]) {
     }
 
     fiffs_debug = opts.debug;
+    fiffs::FS::init();
 
     se = fuse_session_new(&args, &fiffs_oper, sizeof(fiffs_oper), NULL);
     if (se == NULL)
