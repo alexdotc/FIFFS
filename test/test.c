@@ -45,7 +45,7 @@ int main(int argc, char *const argv[]) {
     timespec_get(&ts1, TIME_UTC);
     sec = ts1.tv_sec - ts0.tv_sec + (ts1.tv_nsec - ts0.tv_nsec) * 1E-9;
 
-    printf("Took approx. %.4f seconds to stat %ld files\n", sec, nfiles);
+    printf("Took approx. %.3f seconds to stat %ld files\n", sec, nfiles);
 
     return 0;
 }
