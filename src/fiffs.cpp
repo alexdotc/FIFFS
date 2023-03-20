@@ -42,6 +42,7 @@ struct Inode {
     typedef enum { DIR, FILE } type;
     string name;
     string data;
+    type T;
     std::list<int> children;
 
     struct stat st {
@@ -49,7 +50,7 @@ struct Inode {
     };
 
     Inode() = default;
-    Inode(const string &name_, type T) : name(name_) {
+    Inode(const string &name_, const type T_) : name(name_), T(T_) {
         if (T == DIR)
             st.st_mode = S_IFDIR | 0755;
 
@@ -168,7 +169,15 @@ static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off
 
 static void fiffs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     debug_printf("fiffs_open\n");
-    if (ino < 1 || ino > FS::inodes.size())
+    if (ino < 1 || ino >= FS::inodes.size() || (FS::inodes[ino].T == FS::Inode::DIR))
+        fuse_reply_err(req, ENOENT); // TODO change error?
+    else
+        fuse_reply_open(req, fi);
+}
+
+static void fiffs_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    debug_printf("fiffs_open\n");
+    if (ino < 1 || ino >= FS::inodes.size() || (FS::inodes[ino].T == FS::Inode::FILE))
         fuse_reply_err(req, ENOENT); // TODO change error?
     else
         fuse_reply_open(req, fi);
@@ -294,6 +303,7 @@ static const struct fuse_lowlevel_ops fiffs_oper = {
     .read = fiffs_read,
     .write = fiffs_write,
     .flush = fiffs_flush,
+    .opendir = fiffs_opendir,
     .readdir = fiffs_readdir,
 };
 
