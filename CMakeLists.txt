@@ -4,6 +4,8 @@ project(
   tmpfs_fuse
   LANGUAGES CXX)
 
+set(CMAKE_CXX_STANDARD 17)
+
 find_package(PkgConfig)
 pkg_check_modules(FUSE3 REQUIRED fuse3)
 
