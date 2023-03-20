@@ -42,8 +42,7 @@ struct Inode {
     typedef enum { DIR, FILE } type;
     string name;
     string data;
-    std::list<int> dir_children;
-    std::list<int> file_children;
+    std::list<int> children;
 
     struct stat st {
         .st_ino = (ino_t)-1, .st_nlink = 1, .st_mode = S_IFREG | 0666, .st_uid = uid, .st_gid = uid, .st_size = 0,
@@ -104,25 +103,19 @@ static void fiffs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 
 static void fiffs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     debug_printf("fiffs_lookup %s\n", name);
+    try {
+        struct fuse_entry_param e;
+        memset(&e, 0, sizeof(e));
+        int ino = FS::name_to_inode.at(string(name));
 
-    if (parent != 1)
+        e.ino = ino;
+        e.attr_timeout = 1.0;
+        e.entry_timeout = 1.0;
+        fiffs_stat(e.ino, &e.attr);
+
+        fuse_reply_entry(req, &e);
+    } catch (...) {
         fuse_reply_err(req, ENOENT);
-    else {
-        try {
-            struct fuse_entry_param e;
-            memset(&e, 0, sizeof(e));
-            int ino = FS::name_to_inode.at(string(name));
-
-            e.ino = ino;
-            e.attr_timeout = 1.0;
-            e.entry_timeout = 1.0;
-            fiffs_stat(e.ino, &e.attr);
-
-            fuse_reply_entry(req, &e);
-            return;
-        } catch (...) {
-            fuse_reply_err(req, ENOENT);
-        }
     }
 }
 
@@ -136,46 +129,47 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
 static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     debug_printf("fiffs_readdir\n");
 
-    if (ino != 1)
-        fuse_reply_err(req, ENOTDIR);
-    else {
-        size_t bufsize;
+    size_t bufsize;
 
-        std::vector<int> entry_sizes(FS::inodes.size());
-        entry_sizes[0] = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
-        entry_sizes[1] = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
+    std::list<int> children = FS::inodes[ino].children;
+    std::vector<int> entry_sizes(children.size() + 2);
+    entry_sizes[0] = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
+    entry_sizes[1] = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
 
-        bufsize = entry_sizes[0] + entry_sizes[1];
-        for (int i = 2; i < FS::inodes.size(); ++i) {
-            entry_sizes[i] = fuse_add_direntry(req, NULL, 0, FS::inodes[i].name.c_str(), NULL, 0);
-            bufsize += entry_sizes[i];
-        }
-
-        struct stat stbuf;
-        memset(&stbuf, 0, sizeof(stbuf));
-        stbuf.st_ino = 1;
-        std::vector<char> buf(bufsize);
-
-        int offset = 0;
-        fuse_add_direntry(req, buf.data(), entry_sizes[0], ".", &stbuf, offset + entry_sizes[0]);
-        offset += entry_sizes[0];
-        fuse_add_direntry(req, buf.data() + offset, entry_sizes[1], "..", &stbuf, offset + entry_sizes[1]);
-        offset += entry_sizes[1];
-        for (int i = 2; i < FS::inodes.size(); ++i) {
-            stbuf.st_ino = i;
-            const auto &e_size = entry_sizes[i];
-            fuse_add_direntry(req, buf.data() + offset, e_size, FS::inodes[i].name.c_str(), &stbuf, offset + e_size);
-            offset += e_size;
-        }
-
-        reply_buf_limited(req, buf.data(), bufsize, off, size);
+    bufsize = entry_sizes[0] + entry_sizes[1];
+    int i = 2;
+    for (const auto &cno : children) {
+        entry_sizes[i] = fuse_add_direntry(req, NULL, 0, FS::inodes[cno].name.c_str(), NULL, 0);
+        bufsize += entry_sizes[i];
+        i++;
     }
+
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(stbuf));
+    stbuf.st_ino = ino;
+    std::vector<char> buf(bufsize);
+
+    int offset = 0;
+    fuse_add_direntry(req, buf.data(), entry_sizes[0], ".", &stbuf, offset + entry_sizes[0]);
+    offset += entry_sizes[0];
+    fuse_add_direntry(req, buf.data() + offset, entry_sizes[1], "..", &stbuf, offset + entry_sizes[1]);
+    offset += entry_sizes[1];
+    i = 2;
+    for (const auto &cno : children) {
+        stbuf.st_ino = FS::inodes[cno].st.st_ino;
+        const auto &e_size = entry_sizes[i];
+        fuse_add_direntry(req, buf.data() + offset, e_size, FS::inodes[cno].name.c_str(), &stbuf, offset + e_size);
+        offset += e_size;
+        i++;
+    }
+
+    reply_buf_limited(req, buf.data(), bufsize, off, size);
 }
 
 static void fiffs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     debug_printf("fiffs_open\n");
-    if (ino < 2)
-        fuse_reply_err(req, EISDIR);
+    if (ino < 1 || ino > FS::inodes.size())
+        fuse_reply_err(req, ENOENT); // TODO change error?
     else
         fuse_reply_open(req, fi);
 }
@@ -194,7 +188,7 @@ static void fiffs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, s
 static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev) {
     debug_printf("fiffs_mknod %s %ld\n", name, parent);
 
-    if (parent == 1 && S_ISREG(mode)) {
+    if (S_ISREG(mode)) {
         FS::inodes.push_back(FS::Inode(name, FS::Inode::FILE));
         int ino = FS::inodes.size() - 1;
         fuse_entry_param e;
@@ -203,6 +197,7 @@ static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mod
         e.attr_timeout = 1.0;
         e.entry_timeout = 1.0;
         e.generation = e.attr.st_ino;
+        FS::inodes[parent].children.push_back(ino);
 
         debug_printf("inserting %s at %d\n", name, fileno);
         FS::name_to_inode.insert({string(name), ino});
@@ -210,6 +205,24 @@ static void fiffs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mod
     } else {
         fuse_reply_err(req, EPERM);
     }
+}
+
+static void fiffs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode) {
+    debug_printf("fiffs_mkdir %s %ld\n", name, parent);
+
+    FS::inodes.push_back(FS::Inode(name, FS::Inode::DIR));
+    int ino = FS::inodes.size() - 1;
+    fuse_entry_param e;
+    e.attr = FS::inodes.back().st;
+    FS::inodes.back().st.st_ino = e.ino = e.attr.st_ino = ino;
+    e.attr_timeout = 1.0;
+    e.entry_timeout = 1.0;
+    e.generation = e.attr.st_ino;
+    FS::inodes[parent].children.push_back(ino);
+
+    debug_printf("inserting %s at %d\n", name, fileno);
+    FS::name_to_inode.insert({string(name), ino});
+    fuse_reply_entry(req, &e);
 }
 
 static void fiffs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi) {
@@ -276,6 +289,7 @@ static const struct fuse_lowlevel_ops fiffs_oper = {
     .getattr = fiffs_getattr,
     .setattr = fiffs_setattr,
     .mknod = fiffs_mknod,
+    .mkdir = fiffs_mkdir,
     .open = fiffs_open,
     .read = fiffs_read,
     .write = fiffs_write,
