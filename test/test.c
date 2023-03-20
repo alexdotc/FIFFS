@@ -20,9 +20,8 @@ int main(int argc, char *const argv[]) {
     long nfiles = options->nfiles;
 
     char namebuf[64];
-    struct timespec ts0;
-    struct timespec ts1;
-    time_t sec;
+    struct timespec ts0, ts1;
+    double sec;
     struct stat statbuf;
     timespec_get(&ts0, TIME_UTC);
 
@@ -32,9 +31,9 @@ int main(int argc, char *const argv[]) {
     }
 
     timespec_get(&ts1, TIME_UTC);
-    sec = ts1.tv_sec - ts0.tv_sec;
+    sec = ts1.tv_sec - ts0.tv_sec + (ts1.tv_nsec - ts0.tv_nsec) * 1E-9;
 
-    printf("Took approx. %ld seconds to create %ld files\n", sec, nfiles);
+    printf("Took approx. %.3f seconds to create %ld files\n", sec, nfiles);
 
     timespec_get(&ts0, TIME_UTC);
 
@@ -44,9 +43,9 @@ int main(int argc, char *const argv[]) {
     }
 
     timespec_get(&ts1, TIME_UTC);
-    sec = ts1.tv_sec - ts0.tv_sec;
+    sec = ts1.tv_sec - ts0.tv_sec + (ts1.tv_nsec - ts0.tv_nsec) * 1E-9;
 
-    printf("Took approx. %ld seconds to stat %ld files\n", sec, nfiles);
+    printf("Took approx. %.4f seconds to stat %ld files\n", sec, nfiles);
 
     return 0;
 }
