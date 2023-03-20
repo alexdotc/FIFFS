@@ -129,14 +129,12 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
 static void fiffs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     debug_printf("fiffs_readdir\n");
 
-    size_t bufsize;
-
-    std::list<int> children = FS::inodes[ino].children;
+    const std::list<int> &children = FS::inodes[ino].children;
     std::vector<int> entry_sizes(children.size() + 2);
     entry_sizes[0] = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
     entry_sizes[1] = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
 
-    bufsize = entry_sizes[0] + entry_sizes[1];
+    size_t bufsize = entry_sizes[0] + entry_sizes[1];
     int i = 2;
     for (const auto &cno : children) {
         entry_sizes[i] = fuse_add_direntry(req, NULL, 0, FS::inodes[cno].name.c_str(), NULL, 0);
