@@ -52,7 +52,7 @@ def run_mdtest(path: str, create_only: bool = False, N: int = 100000) -> str:
 
 def parse_args() -> argparse.Namespace:
     argp = argparse.ArgumentParser(description="Update FI accounts based on transition and hire data from IT Filemaker Database")
-    argp.add_argument('-p', '--mpi', default="1", help="Number of MPI processes to launch [1]")
+    argp.add_argument('-p', '--mpi', default=1, type=int, help="Number of MPI processes to launch [1]")
     return argp.parse_args()
 
 input_args = parse_args()
