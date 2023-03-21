@@ -38,7 +38,7 @@ class MountGuest:
 def run_mdtest(path: str, create_only: bool = False, N: int = 100000) -> str:
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
-    args = ["mpirun", "-n", input_args.mpi, "mdtest", "-n", str(N), "-F", "-d", path]
+    args = ["mpirun", "-n", str(input_args.mpi), "mdtest", "-n", str(N), "-F", "-d", path]
     if create_only:
         args = args[0:4] + ['-C', '-T', '-E'] + args[4:]
 
@@ -51,7 +51,7 @@ def run_mdtest(path: str, create_only: bool = False, N: int = 100000) -> str:
     return ",".join(times)
 
 def parse_args() -> argparse.Namespace:
-    argp = argparse.ArgumentParser(description="Update FI accounts based on transition and hire data from IT Filemaker Database")
+    argp = argparse.ArgumentParser(description="Benchmark metadata IOPs for filesystems")
     argp.add_argument('-p', '--mpi', default=1, type=int, help="Number of MPI processes to launch [1]")
     return argp.parse_args()
 
