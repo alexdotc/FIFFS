@@ -4,6 +4,7 @@
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 fiffs_path = '/dev/shm/fiffs'
@@ -42,7 +43,13 @@ def run_mdtest(path: str, create_only: bool = False, N: int = 100000) -> str:
     if create_only:
         args = args[0:4] + ['-C', '-T', '-E'] + args[4:]
 
-    output = subprocess.run(args, capture_output=True).stdout.decode('utf-8')
+    try:
+        cp = subprocess.run(args, capture_output=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"\"{' '.join(e.cmd)}\" exited with rc {e.returncode}:\n {e.stderr.decode('utf-8')}", file=sys.stderr)
+        raise
+
+    output = cp.stdout.decode('utf-8')
     times = []
     for line in output.splitlines():
         if " : " in line:
